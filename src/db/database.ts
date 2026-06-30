@@ -96,6 +96,75 @@ const migrations = [
     ALTER TABLE guild_config
       ADD COLUMN channel_format TEXT NOT NULL DEFAULT 'T{number:02} • {team}';
   `,
+  `
+    ALTER TABLE teams ADD COLUMN leader_prompt_message_id TEXT;
+
+    CREATE TEMP TABLE participant_winners AS
+    SELECT
+      tm.custom_id,
+      tm.team_id,
+      tm.user_id,
+      tm.created_at,
+      c.guild_id,
+      ROW_NUMBER() OVER (
+        PARTITION BY c.guild_id, tm.user_id
+        ORDER BY c.created_at, c.id
+      ) AS assignment_rank
+    FROM team_members tm
+    JOIN customs c ON c.id = tm.custom_id;
+
+    CREATE TABLE migration_notices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    INSERT INTO migration_notices (message, created_at)
+    SELECT
+      'Removed duplicate participant ' || user_id ||
+      ' from custom ' || custom_id ||
+      '; the oldest custom assignment was kept.',
+      unixepoch() * 1000
+    FROM participant_winners
+    WHERE assignment_rank > 1;
+
+    UPDATE teams
+    SET leader_id = NULL
+    WHERE leader_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM participant_winners winner
+        WHERE winner.team_id = teams.id
+          AND winner.user_id = teams.leader_id
+          AND winner.assignment_rank > 1
+      );
+
+    CREATE TABLE team_members_new (
+      guild_id TEXT NOT NULL,
+      custom_id TEXT NOT NULL,
+      team_id INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (custom_id, user_id),
+      UNIQUE (guild_id, user_id),
+      FOREIGN KEY (guild_id) REFERENCES guild_config(guild_id) ON DELETE CASCADE,
+      FOREIGN KEY (custom_id) REFERENCES customs(id) ON DELETE CASCADE,
+      FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+    );
+
+    INSERT INTO team_members_new (
+      guild_id, custom_id, team_id, user_id, created_at
+    )
+    SELECT guild_id, custom_id, team_id, user_id, created_at
+    FROM participant_winners
+    WHERE assignment_rank = 1;
+
+    DROP TABLE team_members;
+    ALTER TABLE team_members_new RENAME TO team_members;
+    CREATE INDEX team_members_custom_team_idx
+      ON team_members(custom_id, team_id);
+    DROP TABLE participant_winners;
+  `,
 ];
 
 export function openDatabase(path: string): Database.Database {

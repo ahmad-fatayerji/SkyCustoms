@@ -1,8 +1,10 @@
 import {
+  ActionRowBuilder,
   ChannelType,
   DiscordAPIError,
   PermissionFlagsBits,
   ThreadAutoArchiveDuration,
+  UserSelectMenuBuilder,
   type CategoryChannel,
   type Client,
   type Guild,
@@ -46,6 +48,7 @@ export class DiscordResources implements ResourceGateway {
   public async provision(customId: string): Promise<void> {
     await this.repair(customId);
     this.repository.setCustomStatus(customId, "setup");
+    await this.syncLeaderPrompts(customId);
     await this.refreshPanel(customId);
   }
 
@@ -148,11 +151,31 @@ export class DiscordResources implements ResourceGateway {
         threadId: thread.id,
         panelMessageId: null,
       });
-    } else if (thread.archived) {
-      await thread.setArchived(false, "SkyCustoms session is active");
+    } else {
+      if (thread.archived) {
+        await thread.setArchived(false, "SkyCustoms session is active");
+      }
+      const canonicalThreadName = `Custom • ${aggregate.custom.name}`;
+      if (thread.name !== canonicalThreadName) {
+        await thread.setName(
+          canonicalThreadName,
+          "Restore SkyCustoms control thread name",
+        );
+      }
+      if (aggregate.custom.starterMessageId) {
+        const starter = await lobby.messages
+          .fetch(aggregate.custom.starterMessageId)
+          .catch(() => null);
+        if (starter) {
+          await starter.edit({
+            content: `**SkyCustoms:** ${aggregate.custom.name}`,
+          });
+        }
+      }
     }
 
     await this.refreshPanel(customId);
+    await this.syncLeaderPrompts(customId);
   }
 
   public async syncTeam(customId: string, teamId: number): Promise<void> {
@@ -174,6 +197,58 @@ export class DiscordResources implements ResourceGateway {
       await voice.setName(canonicalName, "SkyCustoms team rename");
     }
     await this.applyTeamPermissions(voice, aggregate, teamId);
+  }
+
+  public async syncLeaderPrompts(customId: string): Promise<void> {
+    const aggregate = this.requireAggregate(customId);
+    const thread = await this.fetchChannel<GuildTextBasedChannel>(
+      aggregate.custom.threadId,
+    );
+    if (!thread?.isThread()) return;
+    if (thread.archived) {
+      await thread.setArchived(false, "Update leader assignment prompts");
+    }
+    for (const team of aggregate.teams) {
+      const shouldExist =
+        aggregate.custom.status !== "ending" &&
+        aggregate.custom.startedAt === null &&
+        team.leaderId === null;
+      let prompt = team.leaderPromptMessageId
+        ? await thread.messages.fetch(team.leaderPromptMessageId).catch(() => null)
+        : null;
+      if (!shouldExist) {
+        if (prompt) {
+          await prompt.delete().catch((error) => {
+            if (!isMissingDiscordResource(error)) throw error;
+          });
+        }
+        if (team.leaderPromptMessageId) {
+          this.repository.setLeaderPromptMessage(team.id, null);
+        }
+        continue;
+      }
+
+      const payload = {
+        content: `Assign the required leader for **T${String(team.ordinal).padStart(2, "0")} • ${team.name}**:`,
+        components: [
+          new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+            new UserSelectMenuBuilder()
+              .setCustomId(
+                `sc:leaderprompt:${aggregate.custom.id}:${team.ordinal}`,
+              )
+              .setPlaceholder(`Choose the leader for ${team.name}`)
+              .setMinValues(1)
+              .setMaxValues(1),
+          ),
+        ],
+      };
+      if (prompt) {
+        await prompt.edit(payload);
+      } else {
+        prompt = await thread.send(payload);
+        this.repository.setLeaderPromptMessage(team.id, prompt.id);
+      }
+    }
   }
 
   public async refreshPanel(customId: string): Promise<void> {
@@ -268,6 +343,18 @@ export class DiscordResources implements ResourceGateway {
     );
     if (!lobby || lobby.type !== ChannelType.GuildVoice) {
       throw new UserError("The configured return voice lobby is unavailable.");
+    }
+    if (team.leaderPromptMessageId && aggregate.custom.threadId) {
+      const thread = await this.fetchChannel<GuildTextBasedChannel>(
+        aggregate.custom.threadId,
+      );
+      if (thread?.isThread()) {
+        const prompt = await thread.messages
+          .fetch(team.leaderPromptMessageId)
+          .catch(() => null);
+        if (prompt) await prompt.delete();
+      }
+      this.repository.setLeaderPromptMessage(team.id, null);
     }
     const voice = await this.fetchChannel<VoiceChannel>(team.voiceChannelId);
     if (!voice || voice.type !== ChannelType.GuildVoice) return;

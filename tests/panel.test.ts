@@ -38,6 +38,7 @@ function aggregate(
         name: "One",
         leaderId: "leader-1",
         voiceChannelId: "voice-1",
+        leaderPromptMessageId: null,
         spectatorMode: "off",
         members: [],
       },
@@ -48,6 +49,7 @@ function aggregate(
         name: "Two",
         leaderId: "leader-2",
         voiceChannelId: "voice-2",
+        leaderPromptMessageId: null,
         spectatorMode: "off",
         members: [],
       },
@@ -63,32 +65,21 @@ function actions(value: CustomAggregate): string[] {
 }
 
 describe("control panel", () => {
-  it("does not show draft controls for direct customs", () => {
-    const ids = actions(aggregate("direct", "setup"));
-    expect(ids.some((id) => id.includes(":pick:"))).toBe(false);
-    expect(ids.some((id) => id.includes(":start:"))).toBe(false);
-    expect(ids.some((id) => id.includes(":customstart:"))).toBe(true);
+  it("shows only the role-aware manage entry point", () => {
+    expect(actions(aggregate("direct", "setup"))).toEqual([
+      "sc:manage:custom-id",
+    ]);
   });
 
-  it("removes the start button after the custom starts", () => {
-    const value = aggregate("direct", "active");
-    value.custom.startedAt = Date.now();
-    const ids = actions(value);
-    expect(ids.some((id) => id.includes(":customstart:"))).toBe(false);
+  it("does not expose cleanup configuration", () => {
+    const description =
+      buildPanel(aggregate("draft", "setup")).embeds[0]?.toJSON().description;
+    expect(description).not.toContain("Cleanup:");
   });
 
-  it("shows only setup-relevant draft controls before drafting", () => {
-    const ids = actions(aggregate("draft", "setup"));
-    expect(ids.some((id) => id.includes(":start:"))).toBe(true);
-    expect(ids.some((id) => id.includes(":pick:"))).toBe(false);
-    expect(ids.some((id) => id.includes(":add:"))).toBe(false);
-  });
-
-  it("shows draft actions and hides structural controls while drafting", () => {
-    const ids = actions(aggregate("draft", "drafting"));
-    expect(ids.some((id) => id.includes(":pick:"))).toBe(true);
-    expect(ids.some((id) => id.includes(":createteam:"))).toBe(false);
-    expect(ids.some((id) => id.includes(":removeteam:"))).toBe(false);
-    expect(ids.some((id) => id.includes(":add:"))).toBe(false);
+  it("disables management while ending", () => {
+    const panel = buildPanel(aggregate("draft", "ending"));
+    const button = panel.components[0]?.toJSON().components[0];
+    expect(button?.disabled).toBe(true);
   });
 });

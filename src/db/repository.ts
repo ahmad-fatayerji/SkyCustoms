@@ -57,12 +57,17 @@ function teamFromRow(row: Row): Team {
     leaderId: row.leader_id === null ? null : String(row.leader_id),
     voiceChannelId:
       row.voice_channel_id === null ? null : String(row.voice_channel_id),
+    leaderPromptMessageId:
+      row.leader_prompt_message_id === null
+        ? null
+        : String(row.leader_prompt_message_id),
     spectatorMode: row.spectator_mode as SpectatorMode,
   };
 }
 
 function memberFromRow(row: Row): TeamMember {
   return {
+    guildId: String(row.guild_id),
     customId: String(row.custom_id),
     teamId: Number(row.team_id),
     userId: String(row.user_id),
@@ -88,6 +93,14 @@ export class Repository {
 
   public close(): void {
     this.database.close();
+  }
+
+  public drainMigrationNotices(): string[] {
+    const rows = this.database
+      .prepare("SELECT message FROM migration_notices ORDER BY id")
+      .all() as Row[];
+    this.database.prepare("DELETE FROM migration_notices").run();
+    return rows.map((row) => String(row.message));
   }
 
   public getGuildConfig(guildId: string): GuildConfig | null {
@@ -375,6 +388,12 @@ export class Repository {
       .run(status, Date.now(), id);
   }
 
+  public setCustomName(id: string, name: string): void {
+    this.database
+      .prepare("UPDATE customs SET name = ?, updated_at = ? WHERE id = ?")
+      .run(name, Date.now(), id);
+  }
+
   public setCustomResources(
     id: string,
     resources: {
@@ -412,6 +431,15 @@ export class Repository {
       .run(channelId, teamId);
   }
 
+  public setLeaderPromptMessage(
+    teamId: number,
+    messageId: string | null,
+  ): void {
+    this.database
+      .prepare("UPDATE teams SET leader_prompt_message_id = ? WHERE id = ?")
+      .run(messageId, teamId);
+  }
+
   public addTeam(customId: string, ordinal: number, name: string): Team {
     const result = this.database
       .prepare(
@@ -445,62 +473,147 @@ export class Repository {
 
   public setLeader(customId: string, teamId: number, userId: string): void {
     this.database.transaction(() => {
+      const target = this.database
+        .prepare(
+          "SELECT 1 FROM teams WHERE id = ? AND custom_id = ?",
+        )
+        .get(teamId, customId);
+      if (!target) throw new UserError("Team not found.");
       const membership = this.database
         .prepare(
-          "SELECT team_id FROM team_members WHERE custom_id = ? AND user_id = ?",
+          `SELECT tm.custom_id, tm.team_id
+           FROM team_members tm
+           JOIN customs target ON target.id = ?
+           WHERE tm.guild_id = target.guild_id AND tm.user_id = ?`,
         )
-        .get(customId, userId) as { team_id: number } | undefined;
-      if (membership && membership.team_id !== teamId) {
-        throw new UserError("That member already belongs to another team.");
+        .get(customId, userId) as
+        | { custom_id: string; team_id: number }
+        | undefined;
+      if (
+        membership &&
+        (membership.custom_id !== customId || membership.team_id !== teamId)
+      ) {
+        throw new UserError(
+          membership.custom_id === customId
+            ? "That member already belongs to another team."
+            : "That member already belongs to another active custom in this server.",
+        );
       }
       this.database
         .prepare("UPDATE teams SET leader_id = ? WHERE id = ? AND custom_id = ?")
         .run(userId, teamId, customId);
-      this.database
-        .prepare(
-          `INSERT OR IGNORE INTO team_members
-           (custom_id, team_id, user_id, created_at) VALUES (?, ?, ?, ?)`,
-        )
-        .run(customId, teamId, userId, Date.now());
+      if (!membership) {
+        this.database
+          .prepare(
+            `INSERT INTO team_members (
+               guild_id, custom_id, team_id, user_id, created_at
+             )
+             SELECT guild_id, id, ?, ?, ?
+             FROM customs WHERE id = ?`,
+          )
+          .run(teamId, userId, Date.now(), customId);
+      }
     })();
   }
 
   public addTeamMember(customId: string, teamId: number, userId: string): void {
-    try {
-      this.database
-        .prepare(
-          `INSERT INTO team_members
-           (custom_id, team_id, user_id, created_at) VALUES (?, ?, ?, ?)`,
-        )
-        .run(customId, teamId, userId, Date.now());
-    } catch (error) {
-      if (String(error).includes("UNIQUE")) {
-        throw new UserError("That member already belongs to a team.");
-      }
-      throw error;
+    const result = this.updateTeamMembers(customId, teamId, [userId], "add");
+    if (result.unchanged === 1) {
+      throw new UserError("That member already belongs to this team.");
     }
   }
 
-  public removeTeamMember(
+  public updateTeamMembers(
     customId: string,
     teamId: number,
-    userId: string,
-  ): void {
-    const team = this.database
-      .prepare("SELECT leader_id FROM teams WHERE id = ? AND custom_id = ?")
-      .get(teamId, customId) as { leader_id: string | null } | undefined;
-    if (!team) throw new UserError("Team not found.");
-    if (team.leader_id === userId) {
-      throw new UserError("Replace the team leader before removing them.");
-    }
-    const result = this.database
-      .prepare(
-        "DELETE FROM team_members WHERE custom_id = ? AND team_id = ? AND user_id = ?",
-      )
-      .run(customId, teamId, userId);
-    if (result.changes === 0) {
-      throw new UserError("That member is not on this team.");
-    }
+    userIds: readonly string[],
+    action: "add" | "remove",
+  ): { changed: number; unchanged: number } {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0) return { changed: 0, unchanged: 0 };
+    return this.database.transaction(() => {
+      const target = this.database
+        .prepare(
+          `SELECT c.guild_id, t.leader_id
+           FROM teams t
+           JOIN customs c ON c.id = t.custom_id
+           WHERE t.id = ? AND t.custom_id = ?`,
+        )
+        .get(teamId, customId) as
+        | { guild_id: string; leader_id: string | null }
+        | undefined;
+      if (!target) throw new UserError("Team not found.");
+
+      const placeholders = uniqueUserIds.map(() => "?").join(",");
+      const memberships = this.database
+        .prepare(
+          `SELECT custom_id, team_id, user_id
+           FROM team_members
+           WHERE guild_id = ? AND user_id IN (${placeholders})`,
+        )
+        .all(target.guild_id, ...uniqueUserIds) as Array<{
+        custom_id: string;
+        team_id: number;
+        user_id: string;
+      }>;
+      const byUser = new Map(
+        memberships.map((membership) => [membership.user_id, membership]),
+      );
+
+      if (action === "add") {
+        const conflict = uniqueUserIds.find((userId) => {
+          const membership = byUser.get(userId);
+          return (
+            membership &&
+            (membership.custom_id !== customId || membership.team_id !== teamId)
+          );
+        });
+        if (conflict) {
+          const membership = byUser.get(conflict)!;
+          throw new UserError(
+            membership.custom_id === customId
+              ? `<@${conflict}> already belongs to another team.`
+              : `<@${conflict}> already belongs to another active custom in this server.`,
+          );
+        }
+        const missing = uniqueUserIds.filter((userId) => !byUser.has(userId));
+        const insert = this.database.prepare(
+          `INSERT INTO team_members (
+             guild_id, custom_id, team_id, user_id, created_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        );
+        const now = Date.now();
+        for (const userId of missing) {
+          insert.run(target.guild_id, customId, teamId, userId, now);
+        }
+        return {
+          changed: missing.length,
+          unchanged: uniqueUserIds.length - missing.length,
+        };
+      }
+
+      if (target.leader_id && uniqueUserIds.includes(target.leader_id)) {
+        throw new UserError(
+          "Replace the team leader before removing them.",
+        );
+      }
+      const present = uniqueUserIds.filter((userId) => {
+        const membership = byUser.get(userId);
+        return (
+          membership?.custom_id === customId &&
+          membership.team_id === teamId
+        );
+      });
+      const remove = this.database.prepare(
+        `DELETE FROM team_members
+         WHERE custom_id = ? AND team_id = ? AND user_id = ?`,
+      );
+      for (const userId of present) remove.run(customId, teamId, userId);
+      return {
+        changed: present.length,
+        unchanged: uniqueUserIds.length - present.length,
+      };
+    })();
   }
 
   public startDraft(customId: string, order: number[]): void {

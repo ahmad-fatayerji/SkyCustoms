@@ -49,10 +49,12 @@ export interface Team {
   name: string;
   leaderId: string | null;
   voiceChannelId: string | null;
+  leaderPromptMessageId: string | null;
   spectatorMode: SpectatorMode;
 }
 
 export interface TeamMember {
+  guildId: string;
   customId: string;
   teamId: number;
   userId: string;

@@ -8,7 +8,9 @@ voice channels for custom games.
 - Supports multiple Discord servers.
 - Creates 2–10 teams in a temporary category.
 - Direct roster assignment or randomized snake drafts.
-- Team leaders can rename teams, manage players, and configure spectators.
+- Prepared leader-assignment prompts and role-aware private controls.
+- Bulk roster changes with one active custom per player in each server.
+- Creators can rename customs; leaders can rename and manage their teams.
 - Spectators can be disabled, silent, or allowed to speak.
 - Moves connected players into team channels when a custom starts.
 - Returns everyone to a configured voice lobby when the custom ends.
@@ -79,6 +81,11 @@ For development with automatic TypeScript restarts:
 docker compose -f compose.dev.yaml up --build
 ```
 
+The named data volumes contain `/data/skycustoms.sqlite`, including every
+server's setup and active customs. Replacing or deleting only a container keeps
+this data. Removing `skycustoms-data`, or running `docker compose down -v` for
+development, permanently removes the corresponding database.
+
 ## Rootless Podman with systemd
 
 Build the image and create the token secret:
@@ -133,9 +140,20 @@ Create and start a custom:
 
 ```text
 /custom create name:CS2 5v5 teams:2 mode:Direct assignment
-/team leader team:1 user:@LeaderOne
-/team leader team:2 user:@LeaderTwo
-/team add team:1 user:@Player
+```
+
+SkyCustoms immediately posts one leader selector for each team. After assigning
+the leaders, use the control panel's **Manage** button. Creators see custom
+controls, while leaders see only their team controls. Adding and removing
+players opens a selector for up to 25 users.
+
+Direct slash commands remain available as shortcuts. Team arguments use
+autocomplete labels instead of team numbers:
+
+```text
+/team leader team:<choose a team> user:@LeaderOne
+/team add team:<choose a team>
+/custom rename name:Friday 5v5
 /custom start
 ```
 
