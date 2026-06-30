@@ -31,11 +31,15 @@ import type {
 import type { Logger } from "../logger.js";
 import { buildPanel } from "./panel.js";
 
-function isMissingDiscordResource(error: unknown): boolean {
-  return (
-    error instanceof DiscordAPIError &&
-    (error.code === 10003 || error.code === 10008)
-  );
+export function isMissingDiscordResource(error: unknown): boolean {
+  if (error instanceof DiscordAPIError) {
+    return error.code === 10003 || error.code === 10008;
+  }
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  const code = Number(error.code);
+  return code === 10003 || code === 10008;
 }
 
 export class DiscordResources implements ResourceGateway {
@@ -441,7 +445,7 @@ export class DiscordResources implements ResourceGateway {
             if (message) await message.delete();
           }
         } catch (error) {
-          errors.push(error);
+          if (!isMissingDiscordResource(error)) errors.push(error);
         }
       }
     }
@@ -452,6 +456,17 @@ export class DiscordResources implements ResourceGateway {
           customId,
           guildId: aggregate.custom.guildId,
           errorCount: errors.length,
+          errors: errors.map((error) =>
+            error instanceof Error
+              ? {
+                  name: error.name,
+                  message: error.message,
+                  ...(error instanceof DiscordAPIError
+                    ? { code: error.code, status: error.status }
+                    : {}),
+                }
+              : { value: String(error) },
+          ),
         },
         "Custom cleanup was incomplete and will be retried",
       );
