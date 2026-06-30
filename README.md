@@ -144,3 +144,34 @@ Optional naming templates:
 
 Supported placeholders are `{custom}`, `{team}`, `{number}`, and
 `{number:02}`.
+
+## Automatic deployment
+
+The included GitHub Actions workflow deploys `main` over SSH using rootless
+Podman and the supplied Quadlets.
+
+Prepare the server once as the deployment user:
+
+```sh
+sudo mkdir -p /opt/skycustoms
+sudo chown "$USER:$USER" /opt/skycustoms
+git clone https://github.com/ahmad-fatayerji/SkyCustoms.git /opt/skycustoms
+sudo loginctl enable-linger "$USER"
+```
+
+Add these GitHub Actions repository secrets:
+
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PRIVATE_KEY`
+- `DISCORD_TOKEN`
+- `DISCORD_CLIENT_ID`
+
+Optional repository variables:
+
+- `LOG_LEVEL` (default: `info`)
+- `PRESENCE_ROTATION_SECONDS` (default: `45`)
+
+Every push to `main` fast-forwards the server checkout, builds
+`localhost/skycustoms:latest`, updates the Podman secret and environment,
+installs the Quadlets, and restarts `skycustoms.service`.
