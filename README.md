@@ -17,7 +17,7 @@ voice channels for custom games.
 - Manual ending and automatic inactivity cleanup.
 - Persistent SQLite state with restart recovery and channel repair.
 - Configurable category and channel names.
-- Rotating Discord bot presence based on setup, draft, live, and cleanup states.
+- Rotating Discord presence with aggregate statistics and gaming jokes.
 
 ## Create and install the Discord bot
 
