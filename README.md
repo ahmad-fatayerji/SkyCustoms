@@ -67,6 +67,12 @@ View logs with:
 docker logs -f skycustoms
 ```
 
+SkyCustoms writes logs to standard output and does not set a retention period.
+Docker, Podman, or systemd keeps and rotates them according to the host's
+logging configuration. For the Quadlet deployment, inspect retained logs with
+`journalctl --user -u skycustoms.service`; configure `journald.conf` on the
+server if a fixed retention limit is required.
+
 For development with automatic TypeScript restarts:
 
 ```sh
@@ -115,9 +121,13 @@ The server owner then runs:
 
 ```text
 /setup lobby text-channel:#customs-lobby voice-channel:Custom Lobby
+/setup host-user action:Add
 /setup host-role action:Add role:@Custom Hosts
 /setup status
 ```
+
+The `host-user` command opens a private selector where the server owner can add
+or remove up to 25 users at once.
 
 Create and start a custom:
 
@@ -144,3 +154,34 @@ Optional naming templates:
 
 Supported placeholders are `{custom}`, `{team}`, `{number}`, and
 `{number:02}`.
+
+## Automatic deployment
+
+The included GitHub Actions workflow deploys `main` over SSH using rootless
+Podman and the supplied Quadlets.
+
+Prepare the server once as the deployment user:
+
+```sh
+sudo mkdir -p /opt/skycustoms
+sudo chown "$USER:$USER" /opt/skycustoms
+git clone https://github.com/ahmad-fatayerji/SkyCustoms.git /opt/skycustoms
+sudo loginctl enable-linger "$USER"
+```
+
+Add these GitHub Actions repository secrets:
+
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PRIVATE_KEY`
+- `DISCORD_TOKEN`
+- `DISCORD_CLIENT_ID`
+
+Optional repository variables:
+
+- `LOG_LEVEL` (default: `info`)
+- `PRESENCE_ROTATION_SECONDS` (default: `45`)
+
+Every push to `main` fast-forwards the server checkout, builds
+`localhost/skycustoms:latest`, updates the Podman secret and environment,
+installs the Quadlets, and restarts `skycustoms.service`.

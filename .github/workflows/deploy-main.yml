@@ -1,0 +1,81 @@
+name: Deploy SkyCustoms (Podman Quadlet)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skycustoms-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Deploy through SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          PRESENCE_ROTATION_SECONDS: ${{ vars.PRESENCE_ROTATION_SECONDS }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          envs: DISCORD_TOKEN,DISCORD_CLIENT_ID,LOG_LEVEL,PRESENCE_ROTATION_SECONDS
+          script: |
+            set -euo pipefail
+
+            APP_DIR=/opt/skycustoms
+            : "${DISCORD_TOKEN:?Missing DISCORD_TOKEN GitHub secret}"
+            : "${DISCORD_CLIENT_ID:?Missing DISCORD_CLIENT_ID GitHub secret}"
+            LOG_LEVEL="${LOG_LEVEL:-info}"
+            PRESENCE_ROTATION_SECONDS="${PRESENCE_ROTATION_SECONDS:-45}"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "ERROR: $APP_DIR is missing. Clone the repository there once before deploying."
+              exit 1
+            fi
+
+            git config --global --add safe.directory "$APP_DIR" || true
+            cd "$APP_DIR"
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+
+            podman build \
+              -t localhost/skycustoms:latest \
+              -f Containerfile \
+              .
+
+            mkdir -p \
+              "$HOME/.config/skycustoms" \
+              "$HOME/.config/containers/systemd"
+            umask 077
+            cat > "$HOME/.config/skycustoms/skycustoms.env" <<EOF
+            DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+            DATABASE_PATH=/data/skycustoms.sqlite
+            LOG_LEVEL=${LOG_LEVEL}
+            PRESENCE_ROTATION_SECONDS=${PRESENCE_ROTATION_SECONDS}
+            EOF
+
+            printf '%s' "$DISCORD_TOKEN" |
+              podman secret create --replace skycustoms-discord-token -
+
+            cp -f \
+              deploy/skycustoms.container \
+              deploy/skycustoms-data.volume \
+              "$HOME/.config/containers/systemd/"
+
+            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+            systemctl --user daemon-reload
+            systemctl --user restart skycustoms.service
+            systemctl --user status skycustoms.service --no-pager
