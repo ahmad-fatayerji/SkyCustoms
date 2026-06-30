@@ -26,7 +26,9 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 RUN groupadd --gid 10001 skycustoms \
-    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin skycustoms
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin skycustoms \
+    && mkdir -p /data \
+    && chown 10001:10001 /data
 
 COPY --from=build --chown=10001:10001 /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
