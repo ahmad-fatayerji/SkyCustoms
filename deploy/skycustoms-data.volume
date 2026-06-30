@@ -1,4 +1,4 @@
 [Volume]
 VolumeName=skycustoms-data
-UID=10001
-GID=10001
+User=10001
+Group=10001
