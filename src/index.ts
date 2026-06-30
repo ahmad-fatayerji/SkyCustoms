@@ -18,6 +18,9 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel);
   const database = openDatabase(config.databasePath);
   const repository = new Repository(database);
+  for (const notice of repository.drainMigrationNotices()) {
+    logger.warn({ notice }, "Database migration reconciled participant data");
+  }
   const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
   });

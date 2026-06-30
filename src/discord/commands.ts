@@ -22,6 +22,16 @@ function addCustomReference(
     .setAutocomplete(true);
 }
 
+function addTeamReference(
+  option: SlashCommandStringOption,
+): SlashCommandStringOption {
+  return option
+    .setName("team")
+    .setDescription("Team name")
+    .setAutocomplete(true)
+    .setRequired(true);
+}
+
 export const commandDefinitions = [
   new SlashCommandBuilder()
     .setName("setup")
@@ -150,6 +160,19 @@ export const commandDefinitions = [
     )
     .addSubcommand((command) =>
       command
+        .setName("rename")
+        .setDescription("Rename a custom")
+        .addStringOption((option) =>
+          option
+            .setName("name")
+            .setDescription("New custom name")
+            .setMaxLength(48)
+            .setRequired(true),
+        )
+        .addStringOption(addCustomReference),
+    )
+    .addSubcommand((command) =>
+      command
         .setName("timeout")
         .setDescription("Change inactivity timeouts")
         .addIntegerOption((option) =>
@@ -205,109 +228,50 @@ export const commandDefinitions = [
       command
         .setName("delete")
         .setDescription("Remove a team and its channel")
-        .addIntegerOption((option) =>
-          option
-            .setName("team")
-            .setDescription("Team number")
-            .setMinValue(1)
-            .setMaxValue(10)
-            .setRequired(true),
-        )
-        .addStringOption(addCustomReference),
+        .addStringOption(addTeamReference),
     )
     .addSubcommand((command) =>
       command
         .setName("leader")
         .setDescription("Assign or replace a team leader")
-        .addIntegerOption((option) =>
-          option
-            .setName("team")
-            .setDescription("Team number")
-            .setMinValue(1)
-            .setMaxValue(10)
-            .setRequired(true),
-        )
+        .addStringOption(addTeamReference)
         .addUserOption((option) =>
           option
             .setName("user")
             .setDescription("New leader")
             .setRequired(true),
-        )
-        .addStringOption(addCustomReference),
+        ),
     )
     .addSubcommand((command) =>
       command
         .setName("rename")
         .setDescription("Rename a team")
-        .addIntegerOption((option) =>
-          option
-            .setName("team")
-            .setDescription("Team number")
-            .setMinValue(1)
-            .setMaxValue(10)
-            .setRequired(true),
-        )
+        .addStringOption(addTeamReference)
         .addStringOption((option) =>
           option
             .setName("name")
             .setDescription("New team name")
             .setMaxLength(64)
             .setRequired(true),
-        )
-        .addStringOption(addCustomReference),
+        ),
     )
     .addSubcommand((command) =>
       command
         .setName("add")
-        .setDescription("Add a player")
-        .addIntegerOption((option) =>
-          option
-            .setName("team")
-            .setDescription("Team number")
-            .setMinValue(1)
-            .setMaxValue(10)
-            .setRequired(true),
-        )
-        .addUserOption((option) =>
-          option
-            .setName("user")
-            .setDescription("Player")
-            .setRequired(true),
-        )
-        .addStringOption(addCustomReference),
+        .setDescription("Add up to 25 players")
+        .addStringOption(addTeamReference),
     )
     .addSubcommand((command) =>
       command
         .setName("remove")
-        .setDescription("Remove a player")
-        .addIntegerOption((option) =>
-          option
-            .setName("team")
-            .setDescription("Team number")
-            .setMinValue(1)
-            .setMaxValue(10)
-            .setRequired(true),
-        )
-        .addUserOption((option) =>
-          option
-            .setName("user")
-            .setDescription("Player")
-            .setRequired(true),
-        )
-        .addStringOption(addCustomReference),
+        .setDescription("Remove up to 25 players")
+        .addStringOption(addTeamReference),
     )
     .addSubcommand((command) =>
       command
         .setName("spectators")
         .setDescription("Set spectator access")
-        .addIntegerOption((option) =>
-          option
-            .setName("team")
-            .setDescription("Team number")
-            .setMinValue(1)
-            .setMaxValue(10)
-            .setRequired(true),
-        )
+        .addStringOption(addTeamReference)
         .addStringOption((option) =>
           option
             .setName("mode")
@@ -318,8 +282,7 @@ export const commandDefinitions = [
               { name: "Silent", value: "silent" },
               { name: "May speak", value: "speak" },
             ),
-        )
-        .addStringOption(addCustomReference),
+        ),
     ),
   new SlashCommandBuilder()
     .setName("draft")

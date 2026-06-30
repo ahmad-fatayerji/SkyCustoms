@@ -32,9 +32,10 @@ import {
   validateCategoryFormat,
   validateChannelFormat,
 } from "../domain/naming.js";
-import type { CustomMode, SpectatorMode } from "../domain/types.js";
+import type { CustomMode, SpectatorMode, Team } from "../domain/types.js";
 import type { Logger } from "../logger.js";
 import { commandDefinitions } from "./commands.js";
+import { buildManageComponents } from "./manage.js";
 
 export class InteractionHandler {
   public constructor(
@@ -314,6 +315,13 @@ export class InteractionHandler {
       await interaction.editReply(
         `Custom started: moved **${summary.moved}**, disconnected/not in voice **${summary.disconnected}**, failed **${summary.failed}**.`,
       );
+    } else if (subcommand === "rename") {
+      await this.sessions.renameCustom(
+        actor,
+        reference,
+        interaction.options.getString("name", true),
+      );
+      await interaction.editReply("Custom renamed.");
     } else if (subcommand === "timeout") {
       await this.sessions.setTimeouts(
         actor,
@@ -351,8 +359,8 @@ export class InteractionHandler {
     actor: Actor,
     subcommand: string,
   ): Promise<void> {
-    const reference = this.resolveReference(interaction);
     if (subcommand === "create") {
+      const reference = this.resolveReference(interaction);
       const leader = interaction.options.getUser("leader");
       if (leader) this.rejectBot(leader.bot);
       const ordinal = await this.sessions.addTeam(
@@ -364,7 +372,11 @@ export class InteractionHandler {
       await interaction.editReply(`Created Team ${ordinal}.`);
       return;
     }
-    const ordinal = interaction.options.getInteger("team", true);
+    const target = this.resolveTeamTarget(
+      interaction.guildId,
+      interaction.options.getString("team", true),
+    );
+    const { reference, ordinal } = target;
     if (subcommand === "delete") {
       await this.sessions.removeTeam(actor, reference, ordinal);
       await interaction.editReply(`Removed Team ${ordinal}.`);
@@ -382,14 +394,13 @@ export class InteractionHandler {
       );
       await interaction.editReply(`Team ${ordinal} renamed.`);
     } else if (subcommand === "add") {
-      const user = interaction.options.getUser("user", true);
-      this.rejectBot(user.bot);
-      await this.sessions.addMember(actor, reference, ordinal, user.id);
-      await interaction.editReply(`Added <@${user.id}> to Team ${ordinal}.`);
+      await interaction.editReply(
+        this.buildBulkMemberSelect(reference, ordinal, "add"),
+      );
     } else if (subcommand === "remove") {
-      const user = interaction.options.getUser("user", true);
-      await this.sessions.removeMember(actor, reference, ordinal, user.id);
-      await interaction.editReply(`Removed <@${user.id}> from Team ${ordinal}.`);
+      await interaction.editReply(
+        this.buildBulkMemberSelect(reference, ordinal, "remove"),
+      );
     } else if (subcommand === "spectators") {
       const mode = interaction.options.getString("mode", true) as SpectatorMode;
       await this.sessions.setSpectators(actor, reference, ordinal, mode);
@@ -435,6 +446,23 @@ export class InteractionHandler {
       await interaction.update({ content: "Cancelled.", components: [] });
       return;
     }
+    if (action === "manage") {
+      const aggregate = this.repository.getAggregate(
+        interaction.guildId,
+        customId,
+      );
+      if (!aggregate) throw new UserError("Custom not found.");
+      const components = buildManageComponents(actor, aggregate);
+      if (components.length === 0) {
+        throw new UserError("You do not manage this custom or one of its teams.");
+      }
+      await interaction.reply({
+        content: `Manage **${aggregate.custom.name}**:`,
+        flags: MessageFlags.Ephemeral,
+        components,
+      });
+      return;
+    }
     if (action === "end") {
       await interaction.reply({
         content: "End this custom and delete all temporary channels?",
@@ -459,26 +487,68 @@ export class InteractionHandler {
       await this.sessions.end(actor, customId);
       return;
     }
-    if (action === "rename") {
+    if (action === "renamecustom") {
       const modal = new ModalBuilder()
-        .setCustomId(`sc:renamemodal:${customId}`)
-        .setTitle("Rename a team")
+        .setCustomId(`sc:renamecustommodal:${customId}`)
+        .setTitle("Rename custom")
         .addComponents(
           new ActionRowBuilder<TextInputBuilder>().addComponents(
             new TextInputBuilder()
-              .setCustomId("team")
-              .setLabel("Team number")
+              .setCustomId("name")
+              .setLabel("New custom name")
               .setStyle(TextInputStyle.Short)
               .setRequired(true)
-              .setMaxLength(2),
+              .setMaxLength(48),
+          ),
+        );
+      await interaction.showModal(modal);
+      return;
+    }
+    if (action === "rename") {
+      const team = this.leaderTeamForScopedAction(
+        actor,
+        interaction.guildId,
+        customId,
+      );
+      if (team) {
+        await interaction.showModal(
+          this.buildRenameTeamModal(customId, team.ordinal),
+        );
+      } else {
+        await this.replyWithTeamSelect(
+          interaction,
+          customId,
+          "renameteam",
+          "Choose the team to rename:",
+        );
+      }
+      return;
+    }
+    if (action === "timeoutmodal") {
+      const aggregate = this.repository.getAggregate(
+        interaction.guildId,
+        customId,
+      );
+      if (!aggregate) throw new UserError("Custom not found.");
+      const modal = new ModalBuilder()
+        .setCustomId(`sc:timeoutsubmit:${customId}`)
+        .setTitle("Inactivity timeouts")
+        .addComponents(
+          new ActionRowBuilder<TextInputBuilder>().addComponents(
+            new TextInputBuilder()
+              .setCustomId("setup")
+              .setLabel("Setup timeout in minutes")
+              .setStyle(TextInputStyle.Short)
+              .setValue(String(aggregate.custom.setupTimeoutMinutes))
+              .setRequired(true),
           ),
           new ActionRowBuilder<TextInputBuilder>().addComponents(
             new TextInputBuilder()
-              .setCustomId("name")
-              .setLabel("New team name")
+              .setCustomId("empty")
+              .setLabel("Empty timeout in minutes")
               .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setMaxLength(64),
+              .setValue(String(aggregate.custom.emptyTimeoutMinutes))
+              .setRequired(true),
           ),
         );
       await interaction.showModal(modal);
@@ -505,10 +575,10 @@ export class InteractionHandler {
     if (["add", "remove", "pick"].includes(action)) {
       let ordinal = 0;
       if (action !== "pick") {
-        const team = this.sessions.findLeaderTeam(
+        const team = this.leaderTeamForScopedAction(
+          actor,
           interaction.guildId,
           customId,
-          interaction.user.id,
         );
         if (!team) {
           await this.replyWithTeamSelect(
@@ -525,9 +595,12 @@ export class InteractionHandler {
         .setCustomId(`sc:${action}select:${customId}:${ordinal}`)
         .setPlaceholder(action === "remove" ? "Select player to remove" : "Select a player")
         .setMinValues(1)
-        .setMaxValues(1);
+        .setMaxValues(action === "pick" ? 1 : 25);
       await interaction.reply({
-        content: "Choose a server member:",
+        content:
+          action === "pick"
+            ? "Choose a server member:"
+            : `Choose up to 25 members to ${action}:`,
         flags: MessageFlags.Ephemeral,
         components: [
           new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(select),
@@ -560,10 +633,10 @@ export class InteractionHandler {
       await this.sessions.repair(actor, customId);
       await interaction.editReply("Custom resources reconciled.");
     } else if (action === "spectators") {
-      const team = this.sessions.findLeaderTeam(
+      const team = this.leaderTeamForScopedAction(
+        actor,
         interaction.guildId,
         customId,
-        interaction.user.id,
       );
       if (!team) {
         const aggregate = this.repository.getAggregate(
@@ -609,8 +682,20 @@ export class InteractionHandler {
     const [namespace, action, customId, ordinalText] =
       interaction.customId.split(":");
     if (namespace !== "sc" || !action || !customId) return;
-    await interaction.deferUpdate();
     const actor = this.actor(interaction);
+    if (action === "leaderprompt") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const user = interaction.users.first();
+      if (!user) throw new UserError("No member was selected.");
+      this.rejectBot(user.bot);
+      const ordinal = Number(ordinalText);
+      await this.sessions.assignLeader(actor, customId, ordinal, user.id);
+      await interaction.editReply(
+        `Assigned <@${user.id}> as the team leader.`,
+      );
+      return;
+    }
+    await interaction.deferUpdate();
     if (action === "setuphosts") {
       if (!actor.isOwner) {
         throw new UserError(
@@ -652,15 +737,31 @@ export class InteractionHandler {
       });
       return;
     }
+    if (action === "addselect" || action === "removeselect") {
+      const users = [...interaction.users.values()];
+      if (users.length === 0) throw new UserError("No members were selected.");
+      if (users.some((user) => user.bot)) {
+        throw new UserError("Bots cannot be team members.");
+      }
+      const ordinal = Number(ordinalText);
+      const result = await this.sessions.updateMembers(
+        actor,
+        customId,
+        ordinal,
+        users.map((user) => user.id),
+        action === "addselect" ? "add" : "remove",
+      );
+      await interaction.editReply({
+        content: `${action === "addselect" ? "Added" : "Removed"} **${result.changed}** member${result.changed === 1 ? "" : "s"}${result.unchanged ? `; **${result.unchanged}** already had the requested state` : ""}.`,
+        components: [],
+      });
+      return;
+    }
     const user = interaction.users.first();
     if (!user) throw new UserError("No member was selected.");
     this.rejectBot(user.bot);
     const ordinal = Number(ordinalText);
-    if (action === "addselect") {
-      await this.sessions.addMember(actor, customId, ordinal, user.id);
-    } else if (action === "removeselect") {
-      await this.sessions.removeMember(actor, customId, ordinal, user.id);
-    } else if (action === "pickselect") {
+    if (action === "pickselect") {
       await this.sessions.draftPick(actor, customId, user.id);
     } else if (action === "leaderselect") {
       await this.sessions.assignLeader(actor, customId, ordinal, user.id);
@@ -699,6 +800,12 @@ export class InteractionHandler {
     }
     const ordinal = Number(interaction.values[0]);
     if (!Number.isInteger(ordinal)) throw new UserError("Invalid team selection.");
+    if (action === "renameteam") {
+      await interaction.showModal(
+        this.buildRenameTeamModal(customId, ordinal),
+      );
+      return;
+    }
     if (action === "specteam") {
       const aggregate = this.repository.getAggregate(
         interaction.guildId,
@@ -745,7 +852,9 @@ export class InteractionHandler {
       .setCustomId(`sc:${nextAction}:${customId}:${ordinal}`)
       .setPlaceholder("Select a server member")
       .setMinValues(1)
-      .setMaxValues(1);
+      .setMaxValues(
+        action === "addteam" || action === "removeteam" ? 25 : 1,
+      );
     await interaction.update({
       content: "Choose a server member:",
       components: [
@@ -757,35 +866,108 @@ export class InteractionHandler {
   private async handleModal(
     interaction: ModalSubmitInteraction<"cached">,
   ): Promise<void> {
-    const [namespace, action, customId] = interaction.customId.split(":");
-    if (namespace !== "sc" || action !== "renamemodal" || !customId) return;
+    const [namespace, action, customId, ordinalText] =
+      interaction.customId.split(":");
+    if (namespace !== "sc" || !action || !customId) return;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const ordinal = Number(interaction.fields.getTextInputValue("team"));
-    if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 10) {
-      throw new UserError("Team number must be between 1 and 10.");
+    if (action === "renamecustommodal") {
+      await this.sessions.renameCustom(
+        this.actor(interaction),
+        customId,
+        interaction.fields.getTextInputValue("name"),
+      );
+      await interaction.editReply("Custom renamed.");
+      return;
     }
-    await this.sessions.renameTeam(
-      this.actor(interaction),
-      customId,
-      ordinal,
-      interaction.fields.getTextInputValue("name"),
-    );
-    await interaction.editReply(`Team ${ordinal} renamed.`);
+    if (action === "renameteammodal") {
+      const ordinal = Number(ordinalText);
+      if (!Number.isInteger(ordinal)) throw new UserError("Invalid team.");
+      await this.sessions.renameTeam(
+        this.actor(interaction),
+        customId,
+        ordinal,
+        interaction.fields.getTextInputValue("name"),
+      );
+      await interaction.editReply(`Team ${ordinal} renamed.`);
+      return;
+    }
+    if (action === "timeoutsubmit") {
+      const setupMinutes = Number(
+        interaction.fields.getTextInputValue("setup"),
+      );
+      const emptyMinutes = Number(
+        interaction.fields.getTextInputValue("empty"),
+      );
+      if (
+        !Number.isInteger(setupMinutes) ||
+        !Number.isInteger(emptyMinutes)
+      ) {
+        throw new UserError("Timeouts must be whole numbers of minutes.");
+      }
+      await this.sessions.setTimeouts(
+        this.actor(interaction),
+        customId,
+        setupMinutes,
+        emptyMinutes,
+      );
+      await interaction.editReply("Custom inactivity timeouts updated.");
+    }
   }
 
   private async handleAutocomplete(
     interaction: import("discord.js").AutocompleteInteraction<"cached">,
   ): Promise<void> {
     const focused = interaction.options.getFocused(true);
-    if (focused.name !== "custom") {
-      await interaction.respond([]);
-      return;
-    }
     if (!this.repository.getGuildConfig(interaction.guildId)?.voiceLobbyChannelId) {
       await interaction.respond([]);
       return;
     }
     const query = String(focused.value).normalize("NFKC").toLocaleLowerCase();
+    if (focused.name === "team") {
+      const actor = this.actor(interaction);
+      const subcommand = interaction.options.getSubcommand();
+      const leaderActions = new Set([
+        "rename",
+        "add",
+        "remove",
+        "spectators",
+      ]);
+      const choices = this.repository
+        .listCustoms(interaction.guildId)
+        .filter((custom) => custom.status !== "ending")
+        .flatMap((custom) => {
+          const aggregate = this.repository.getAggregateById(custom.id);
+          if (!aggregate) return [];
+          const override =
+            custom.creatorId === actor.userId ||
+            actor.isOwner ||
+            actor.isAdministrator;
+          return aggregate.teams
+            .filter(
+              (team) =>
+                override ||
+                (leaderActions.has(subcommand) &&
+                  team.leaderId === actor.userId),
+            )
+            .map((team) => ({
+              name: `${custom.name} — T${String(team.ordinal).padStart(2, "0")} • ${team.name}`.slice(
+                0,
+                100,
+              ),
+              value: `${custom.id}:${team.id}`,
+            }));
+        })
+        .filter((choice) =>
+          choice.name.normalize("NFKC").toLocaleLowerCase().includes(query),
+        )
+        .slice(0, 25);
+      await interaction.respond(choices);
+      return;
+    }
+    if (focused.name !== "custom") {
+      await interaction.respond([]);
+      return;
+    }
     const choices = this.repository
       .listCustoms(interaction.guildId)
       .filter(
@@ -826,6 +1008,84 @@ export class InteractionHandler {
     if (custom) return custom.id;
     throw new UserError(
       "Select a custom or run this command in its control thread.",
+    );
+  }
+
+  private resolveTeamTarget(
+    guildId: string,
+    value: string,
+  ): { reference: string; ordinal: number } {
+    const [customId, teamIdText] = value.split(":");
+    const teamId = Number(teamIdText);
+    if (!customId || !Number.isInteger(teamId)) {
+      throw new UserError("Select a team from the autocomplete list.");
+    }
+    const aggregate = this.repository.getAggregate(guildId, customId);
+    const team = aggregate?.teams.find((candidate) => candidate.id === teamId);
+    if (!aggregate || !team) {
+      throw new UserError("That team is no longer available.");
+    }
+    return { reference: aggregate.custom.id, ordinal: team.ordinal };
+  }
+
+  private buildBulkMemberSelect(
+    customId: string,
+    ordinal: number,
+    action: "add" | "remove",
+  ) {
+    return {
+      content: `Choose up to 25 members to ${action}:`,
+      components: [
+        new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId(`sc:${action}select:${customId}:${ordinal}`)
+            .setPlaceholder(
+              action === "add"
+                ? "Select players to add"
+                : "Select players to remove",
+            )
+            .setMinValues(1)
+            .setMaxValues(25),
+        ),
+      ],
+    };
+  }
+
+  private buildRenameTeamModal(
+    customId: string,
+    ordinal: number,
+  ): ModalBuilder {
+    return new ModalBuilder()
+      .setCustomId(`sc:renameteammodal:${customId}:${ordinal}`)
+      .setTitle("Rename team")
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder()
+            .setCustomId("name")
+            .setLabel("New team name")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(64),
+        ),
+      );
+  }
+
+  private leaderTeamForScopedAction(
+    actor: Actor,
+    guildId: string,
+    customId: string,
+  ): Team | null {
+    const aggregate = this.repository.getAggregate(guildId, customId);
+    if (!aggregate) throw new UserError("Custom not found.");
+    if (
+      actor.userId === aggregate.custom.creatorId ||
+      actor.isOwner ||
+      actor.isAdministrator
+    ) {
+      return null;
+    }
+    return (
+      aggregate.teams.find((team) => team.leaderId === actor.userId) ?? null
     );
   }
 

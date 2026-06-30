@@ -16,4 +16,28 @@ describe("command definitions", () => {
     expect(hostUser).toBeDefined();
     expect(hostUser?.options?.map((option) => option.name)).toEqual(["action"]);
   });
+
+  it("uses autocompleted team targets and interactive bulk rosters", () => {
+    const team = commandDefinitions.find((command) => command.name === "team");
+    const rename = team?.options?.find((option) => option.name === "rename");
+    const add = team?.options?.find((option) => option.name === "add");
+    const teamOption = rename?.options?.find(
+      (option) => option.name === "team",
+    );
+
+    expect(teamOption?.type).toBe(ApplicationCommandOptionType.String);
+    expect("autocomplete" in (teamOption ?? {}) && teamOption.autocomplete).toBe(
+      true,
+    );
+    expect(add?.options?.map((option) => option.name)).toEqual(["team"]);
+  });
+
+  it("registers custom renaming", () => {
+    const custom = commandDefinitions.find(
+      (command) => command.name === "custom",
+    );
+    expect(custom?.options?.some((option) => option.name === "rename")).toBe(
+      true,
+    );
+  });
 });

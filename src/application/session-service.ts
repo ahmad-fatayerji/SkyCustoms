@@ -5,6 +5,7 @@ import {
   normalizeCustomName,
   normalizedNameKey,
   normalizeTeamName,
+  renderCategoryName,
   renderTeamChannelName,
 } from "../domain/naming.js";
 import type {
@@ -20,6 +21,7 @@ export interface ResourceGateway {
   provision(customId: string): Promise<void>;
   repair(customId: string): Promise<void>;
   syncTeam(customId: string, teamId: number): Promise<void>;
+  syncLeaderPrompts(customId: string): Promise<void>;
   refreshPanel(customId: string): Promise<void>;
   moveRosterToTeamChannels(customId: string): Promise<MoveSummary>;
   removeTeamChannel(customId: string, teamId: number): Promise<void>;
@@ -103,14 +105,15 @@ export class SessionService {
     const aggregate = this.requireAggregate(actor.guildId, reference);
     this.authorizer.requireCustomCreatorOrOverride(actor, aggregate.custom);
     this.ensureMutable(aggregate);
-    if (aggregate.custom.status === "drafting") {
+    const team = this.requireTeam(aggregate, ordinal);
+    if (aggregate.custom.status === "drafting" && team.leaderId !== null) {
       throw new UserError("Leaders cannot be replaced during a draft.");
     }
-    const team = this.requireTeam(aggregate, ordinal);
     await this.locks.run(aggregate.custom.id, async () => {
       this.repository.setLeader(aggregate.custom.id, team.id, userId);
       this.repository.touchSetup(aggregate.custom.id);
       await this.resources.syncTeam(aggregate.custom.id, team.id);
+      await this.resources.syncLeaderPrompts(aggregate.custom.id);
       await this.resources.refreshPanel(aggregate.custom.id);
     });
   }
@@ -206,6 +209,54 @@ export class SessionService {
     });
   }
 
+  public async renameCustom(
+    actor: Actor,
+    reference: string,
+    requestedName: string,
+  ): Promise<void> {
+    const aggregate = this.requireAggregate(actor.guildId, reference);
+    this.authorizer.requireCustomCreatorOrOverride(actor, aggregate.custom);
+    this.ensureMutable(aggregate);
+    const name = normalizeCustomName(requestedName);
+    const config = this.repository.getGuildConfig(actor.guildId);
+    if (!config) throw new UserError("This server is not configured.");
+    renderCategoryName(config.categoryFormat, name);
+    if (`Custom • ${name}`.length > 100) {
+      throw new UserError(
+        "The custom name is too long for its Discord control thread.",
+      );
+    }
+    for (const team of aggregate.teams) {
+      renderTeamChannelName(
+        config.channelFormat,
+        name,
+        team.ordinal,
+        team.name,
+      );
+    }
+    const key = normalizedNameKey(name);
+    await this.locks.run(aggregate.custom.id, async () => {
+      const fresh = this.requireAggregate(actor.guildId, aggregate.custom.id);
+      if (
+        this.repository
+          .listCustoms(actor.guildId)
+          .some(
+            (custom) =>
+              custom.id !== fresh.custom.id &&
+              custom.status !== "ending" &&
+              normalizedNameKey(custom.name) === key,
+          )
+      ) {
+        throw new UserError(
+          "An active custom with that name already exists in this server.",
+        );
+      }
+      this.repository.setCustomName(fresh.custom.id, name);
+      this.repository.touchSetup(fresh.custom.id);
+      await this.resources.repair(fresh.custom.id);
+    });
+  }
+
   public async renameTeam(
     actor: Actor,
     reference: string,
@@ -249,16 +300,18 @@ export class SessionService {
       this.repository.setTeamName(team.id, name);
       this.repository.touchSetup(aggregate.custom.id);
       await this.resources.syncTeam(aggregate.custom.id, team.id);
+      await this.resources.syncLeaderPrompts(aggregate.custom.id);
       await this.resources.refreshPanel(aggregate.custom.id);
     });
   }
 
-  public async addMember(
+  public async updateMembers(
     actor: Actor,
     reference: string,
     ordinal: number,
-    userId: string,
-  ): Promise<void> {
+    userIds: readonly string[],
+    action: "add" | "remove",
+  ): Promise<{ changed: number; unchanged: number }> {
     const aggregate = this.requireAggregate(actor.guildId, reference);
     this.ensureMutable(aggregate);
     const team = this.requireTeam(aggregate, ordinal);
@@ -268,38 +321,25 @@ export class SessionService {
       aggregate.custom.status !== "active"
     ) {
       throw new UserError(
-        "Use the draft controls until the custom creator finishes the draft.",
+        action === "add"
+          ? "Use the draft controls until the custom creator finishes the draft."
+          : "Roster edits are locked while drafting.",
       );
     }
-    await this.locks.run(aggregate.custom.id, async () => {
-      this.repository.addTeamMember(aggregate.custom.id, team.id, userId);
-      this.repository.touchSetup(aggregate.custom.id);
-      await this.resources.syncTeam(aggregate.custom.id, team.id);
-      await this.resources.refreshPanel(aggregate.custom.id);
-    });
-  }
-
-  public async removeMember(
-    actor: Actor,
-    reference: string,
-    ordinal: number,
-    userId: string,
-  ): Promise<void> {
-    const aggregate = this.requireAggregate(actor.guildId, reference);
-    this.ensureMutable(aggregate);
-    const team = this.requireTeam(aggregate, ordinal);
-    this.requireTeamManager(actor, aggregate, team);
-    if (
-      aggregate.custom.mode === "draft" &&
-      aggregate.custom.status !== "active"
-    ) {
-      throw new UserError("Roster edits are locked while drafting.");
+    if (userIds.length < 1 || userIds.length > 25) {
+      throw new UserError("Select between 1 and 25 members.");
     }
-    await this.locks.run(aggregate.custom.id, async () => {
-      this.repository.removeTeamMember(aggregate.custom.id, team.id, userId);
+    return this.locks.run(aggregate.custom.id, async () => {
+      const result = this.repository.updateTeamMembers(
+        aggregate.custom.id,
+        team.id,
+        userIds,
+        action,
+      );
       this.repository.touchSetup(aggregate.custom.id);
       await this.resources.syncTeam(aggregate.custom.id, team.id);
       await this.resources.refreshPanel(aggregate.custom.id);
+      return result;
     });
   }
 
@@ -460,6 +500,9 @@ export class SessionService {
     const aggregate = this.requireAggregate(actor.guildId, reference);
     this.authorizer.requireCustomCreatorOrOverride(actor, aggregate.custom);
     this.ensureMutable(aggregate);
+    if (aggregate.custom.startedAt !== null) {
+      throw new UserError("This custom has already started.");
+    }
     if (aggregate.teams.some((team) => !team.leaderId)) {
       throw new UserError("Assign a leader to every team before starting.");
     }
@@ -470,6 +513,10 @@ export class SessionService {
       throw new UserError("Finish the draft before starting the custom.");
     }
     return this.locks.run(aggregate.custom.id, async () => {
+      const fresh = this.repository.getAggregateById(aggregate.custom.id);
+      if (!fresh || fresh.custom.startedAt !== null) {
+        throw new UserError("This custom has already started.");
+      }
       const summary = await this.resources.moveRosterToTeamChannels(
         aggregate.custom.id,
       );
@@ -505,18 +552,6 @@ export class SessionService {
       this.repository.setCustomStatus(customId, "ending");
       await this.resources.destroy(customId, reason);
     });
-  }
-
-  public findLeaderTeam(
-    guildId: string,
-    reference: string,
-    userId: string,
-  ): Team | null {
-    const aggregate = this.requireAggregate(guildId, reference);
-    return (
-      aggregate.teams.find((team) => team.leaderId === userId) ??
-      null
-    );
   }
 
   private requireAggregate(
