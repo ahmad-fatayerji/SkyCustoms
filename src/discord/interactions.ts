@@ -161,15 +161,21 @@ export class InteractionHandler {
     }
     if (subcommand === "host-user") {
       const action = interaction.options.getString("action", true);
-      const user = interaction.options.getUser("user", true);
-      if (action === "add") {
-        this.repository.addHostGrant(interaction.guildId, "user", user.id);
-      } else {
-        this.repository.removeHostGrant(interaction.guildId, "user", user.id);
-      }
-      await interaction.editReply(
-        `${action === "add" ? "Added" : "Removed"} <@${user.id}> ${action === "add" ? "as" : "from"} a SkyCustoms host.`,
-      );
+      const select = new UserSelectMenuBuilder()
+        .setCustomId(`sc:setuphosts:${action}`)
+        .setPlaceholder(
+          action === "add"
+            ? "Select users to add as hosts"
+            : "Select host users to remove",
+        )
+        .setMinValues(1)
+        .setMaxValues(25);
+      await interaction.editReply({
+        content: `Select up to 25 users to ${action} ${action === "add" ? "as SkyCustoms hosts" : "from SkyCustoms hosts"}.`,
+        components: [
+          new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(select),
+        ],
+      });
       return;
     }
     if (subcommand === "host-role") {
@@ -605,6 +611,47 @@ export class InteractionHandler {
     if (namespace !== "sc" || !action || !customId) return;
     await interaction.deferUpdate();
     const actor = this.actor(interaction);
+    if (action === "setuphosts") {
+      if (!actor.isOwner) {
+        throw new UserError(
+          "Only the Discord server owner can configure SkyCustoms.",
+        );
+      }
+      if (
+        !this.repository.getGuildConfig(interaction.guildId)
+          ?.voiceLobbyChannelId
+      ) {
+        throw new UserError(
+          "Configure `/setup lobby` before assigning hosts.",
+        );
+      }
+      if (customId !== "add" && customId !== "remove") {
+        throw new UserError("Invalid host action.");
+      }
+      const users = [...interaction.users.values()];
+      if (users.length === 0) {
+        throw new UserError("No members were selected.");
+      }
+      if (users.some((user) => user.bot)) {
+        throw new UserError("Bots cannot be assigned as SkyCustoms hosts.");
+      }
+      for (const user of users) {
+        if (customId === "add") {
+          this.repository.addHostGrant(interaction.guildId, "user", user.id);
+        } else {
+          this.repository.removeHostGrant(
+            interaction.guildId,
+            "user",
+            user.id,
+          );
+        }
+      }
+      await interaction.editReply({
+        content: `${customId === "add" ? "Added" : "Removed"} ${users.length} SkyCustoms host user${users.length === 1 ? "" : "s"}.`,
+        components: [],
+      });
+      return;
+    }
     const user = interaction.users.first();
     if (!user) throw new UserError("No member was selected.");
     this.rejectBot(user.bot);

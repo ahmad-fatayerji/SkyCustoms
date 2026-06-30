@@ -50,7 +50,7 @@ export const commandDefinitions = [
     .addSubcommand((command) =>
       command
         .setName("host-user")
-        .setDescription("Add or remove an individual host")
+        .setDescription("Add or remove up to 25 host users")
         .addStringOption((option) =>
           option
             .setName("action")
@@ -60,12 +60,6 @@ export const commandDefinitions = [
               { name: "Add", value: "add" },
               { name: "Remove", value: "remove" },
             ),
-        )
-        .addUserOption((option) =>
-          option
-            .setName("user")
-            .setDescription("Host user")
-            .setRequired(true),
         ),
     )
     .addSubcommand((command) =>

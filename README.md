@@ -67,6 +67,12 @@ View logs with:
 docker logs -f skycustoms
 ```
 
+SkyCustoms writes logs to standard output and does not set a retention period.
+Docker, Podman, or systemd keeps and rotates them according to the host's
+logging configuration. For the Quadlet deployment, inspect retained logs with
+`journalctl --user -u skycustoms.service`; configure `journald.conf` on the
+server if a fixed retention limit is required.
+
 For development with automatic TypeScript restarts:
 
 ```sh
@@ -115,9 +121,13 @@ The server owner then runs:
 
 ```text
 /setup lobby text-channel:#customs-lobby voice-channel:Custom Lobby
+/setup host-user action:Add
 /setup host-role action:Add role:@Custom Hosts
 /setup status
 ```
+
+The `host-user` command opens a private selector where the server owner can add
+or remove up to 25 users at once.
 
 Create and start a custom:
 
