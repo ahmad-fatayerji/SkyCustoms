@@ -3,6 +3,7 @@ import {
   DiscordAPIError,
   PermissionFlagsBits,
   ThreadAutoArchiveDuration,
+  type CategoryChannel,
   type Client,
   type Guild,
   type GuildBasedChannel,
@@ -16,7 +17,10 @@ import type {
 } from "../application/session-service.js";
 import type { Repository } from "../db/repository.js";
 import { UserError } from "../domain/errors.js";
-import { renderTeamChannelName } from "../domain/naming.js";
+import {
+  renderCategoryName,
+  renderTeamChannelName,
+} from "../domain/naming.js";
 import type {
   CustomAggregate,
   SpectatorMode,
@@ -64,20 +68,25 @@ export class DiscordResources implements ResourceGateway {
         "The configured lobby channel is missing or is not a text channel.",
       );
     }
-    const sharedCategory = lobby.parent;
-    if (!sharedCategory || sharedCategory.type !== ChannelType.GuildCategory) {
-      throw new UserError(
-        "The configured lobby must be inside the category where team channels should be created.",
-      );
+    const categoryName = renderCategoryName(
+      config.categoryFormat,
+      aggregate.custom.name,
+    );
+    let category = await this.fetchChannel<CategoryChannel>(
+      aggregate.custom.categoryId,
+    );
+    if (!category || category.type !== ChannelType.GuildCategory) {
+      category = await guild.channels.create({
+        name: categoryName,
+        type: ChannelType.GuildCategory,
+        reason: `SkyCustoms ${aggregate.custom.name}`,
+      });
+      this.repository.setCustomResources(customId, {
+        categoryId: category.id,
+      });
+    } else if (category.name !== categoryName) {
+      await category.setName(categoryName, "Restore SkyCustoms category name");
     }
-
-    const legacyCategory =
-      aggregate.custom.categoryId &&
-      aggregate.custom.categoryId !== sharedCategory.id
-        ? await this.fetchChannel<GuildBasedChannel>(
-            aggregate.custom.categoryId,
-          )
-        : null;
 
     aggregate = this.requireAggregate(customId);
     for (const team of aggregate.teams) {
@@ -85,29 +94,31 @@ export class DiscordResources implements ResourceGateway {
       if (!voice || voice.type !== ChannelType.GuildVoice) {
         voice = await guild.channels.create({
           name: renderTeamChannelName(
+            config.channelFormat,
             aggregate.custom.name,
             team.ordinal,
             team.name,
           ),
           type: ChannelType.GuildVoice,
-          parent: sharedCategory.id,
+          parent: category.id,
           userLimit: 0,
           reason: `SkyCustoms ${aggregate.custom.name} team ${team.ordinal}`,
         });
         this.repository.setTeamVoiceChannel(team.id, voice.id);
       } else {
         const canonicalName = renderTeamChannelName(
+          config.channelFormat,
           aggregate.custom.name,
           team.ordinal,
           team.name,
         );
         if (
           voice.name !== canonicalName ||
-          voice.parentId !== sharedCategory.id
+          voice.parentId !== category.id
         ) {
           await voice.edit({
             name: canonicalName,
-            parent: sharedCategory.id,
+            parent: category.id,
             reason: "Restore SkyCustoms channel",
           });
         }
@@ -117,16 +128,6 @@ export class DiscordResources implements ResourceGateway {
         this.requireAggregate(customId),
         team.id,
       );
-    }
-
-    if (
-      legacyCategory?.type === ChannelType.GuildCategory &&
-      legacyCategory.children.cache.size === 0
-    ) {
-      await legacyCategory.delete("Migrate SkyCustoms to shared lobby category");
-    }
-    if (aggregate.custom.categoryId) {
-      this.repository.setCustomResources(customId, { categoryId: null });
     }
 
     aggregate = this.requireAggregate(customId);
@@ -164,6 +165,7 @@ export class DiscordResources implements ResourceGateway {
       return;
     }
     const canonicalName = renderTeamChannelName(
+      this.requireConfig(aggregate.custom.guildId).channelFormat,
       aggregate.custom.name,
       team.ordinal,
       team.name,
@@ -527,6 +529,12 @@ export class DiscordResources implements ResourceGateway {
     const aggregate = this.repository.getAggregateById(customId);
     if (!aggregate) throw new UserError("Custom no longer exists.");
     return aggregate;
+  }
+
+  private requireConfig(guildId: string) {
+    const config = this.repository.getGuildConfig(guildId);
+    if (!config) throw new UserError("This server is not configured.");
+    return config;
   }
 
   private async fetchGuild(guildId: string): Promise<Guild> {

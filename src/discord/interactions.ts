@@ -26,6 +26,12 @@ import type { SessionService } from "../application/session-service.js";
 import type { Config } from "../config.js";
 import type { Repository } from "../db/repository.js";
 import { UserError } from "../domain/errors.js";
+import {
+  renderCategoryName,
+  renderTeamChannelName,
+  validateCategoryFormat,
+  validateChannelFormat,
+} from "../domain/naming.js";
 import type { CustomMode, SpectatorMode } from "../domain/types.js";
 import type { Logger } from "../logger.js";
 import { commandDefinitions } from "./commands.js";
@@ -179,6 +185,61 @@ export class InteractionHandler {
       );
       return;
     }
+    if (subcommand === "naming") {
+      const categoryFormat = validateCategoryFormat(
+        interaction.options.getString("category-format", true),
+      );
+      const channelFormat = validateChannelFormat(
+        interaction.options.getString("channel-format", true),
+      );
+      const categoryPreview = renderCategoryName(
+        categoryFormat,
+        "Example Custom",
+      );
+      const channelPreview = renderTeamChannelName(
+        channelFormat,
+        "Example Custom",
+        1,
+        "Example Team",
+      );
+      const activeCustoms = this.repository
+        .listCustoms(interaction.guildId)
+        .filter((custom) => custom.status !== "ending");
+      for (const custom of activeCustoms) {
+        renderCategoryName(categoryFormat, custom.name);
+        const aggregate = this.repository.getAggregateById(custom.id);
+        for (const team of aggregate?.teams ?? []) {
+          renderTeamChannelName(
+            channelFormat,
+            custom.name,
+            team.ordinal,
+            team.name,
+          );
+        }
+      }
+      this.repository.setNamingFormats(
+        interaction.guildId,
+        categoryFormat,
+        channelFormat,
+      );
+      const repairs = await Promise.allSettled(
+        activeCustoms.map((custom) => this.sessions.repair(actor, custom.id)),
+      );
+      const failed = repairs.filter((result) => result.status === "rejected");
+      await interaction.editReply(
+        [
+          "Naming formats updated.",
+          `Category preview: **${categoryPreview}**`,
+          `Channel preview: **${channelPreview}**`,
+          ...(failed.length
+            ? [
+                `${failed.length} active custom(s) could not be renamed; use \`/custom repair\` after checking their name lengths.`,
+              ]
+            : []),
+        ].join("\n"),
+      );
+      return;
+    }
     const config = this.repository.getGuildConfig(interaction.guildId);
     const grants = this.repository.listHostGrants(interaction.guildId);
     const bot = interaction.guild.members.me;
@@ -203,6 +264,8 @@ export class InteractionHandler {
       [
         `Lobby: ${config ? `<#${config.lobbyChannelId}>` : "Not configured"}`,
         `Voice return lobby: ${config?.voiceLobbyChannelId ? `<#${config.voiceLobbyChannelId}>` : "Not configured"}`,
+        `Category format: \`${config?.categoryFormat ?? "{custom}"}\``,
+        `Channel format: \`${config?.channelFormat ?? "T{number:02} • {team}"}\``,
         `Hosts: ${grants.length ? grants.map((grant) => (grant.type === "role" ? `<@&${grant.id}>` : `<@${grant.id}>`)).join(", ") : "None"}`,
         `Bot permissions: ${missing.length === 0 ? "OK" : `Missing ${missing.length} required permission(s)`}`,
       ].join("\n"),
@@ -514,20 +577,17 @@ export class InteractionHandler {
         });
         return;
       }
-      const next: Record<SpectatorMode, SpectatorMode> = {
-        off: "silent",
-        silent: "speak",
-        speak: "off",
-      };
-      await this.sessions.setSpectators(
-        actor,
+      const select = this.buildSpectatorModeSelect(
         customId,
         team.ordinal,
-        next[team.spectatorMode],
+        team.spectatorMode,
       );
-      await interaction.editReply(
-        `Spectator mode set to **${next[team.spectatorMode]}**.`,
-      );
+      await interaction.editReply({
+        content: `Choose spectator access for **T${String(team.ordinal).padStart(2, "0")} • ${team.name}**:`,
+        components: [
+          new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+        ],
+      });
     }
   }
 
@@ -564,12 +624,35 @@ export class InteractionHandler {
   private async handleTeamSelect(
     interaction: StringSelectMenuInteraction<"cached">,
   ): Promise<void> {
-    const [namespace, action, customId] = interaction.customId.split(":");
+    const [namespace, action, customId, ordinalText] =
+      interaction.customId.split(":");
     if (namespace !== "sc" || !action || !customId) return;
+    if (action === "spectatormode") {
+      const ordinal = Number(ordinalText);
+      const mode = interaction.values[0] as SpectatorMode | undefined;
+      if (
+        !Number.isInteger(ordinal) ||
+        !mode ||
+        !["off", "silent", "speak"].includes(mode)
+      ) {
+        throw new UserError("Invalid spectator selection.");
+      }
+      await interaction.deferUpdate();
+      await this.sessions.setSpectators(
+        this.actor(interaction),
+        customId,
+        ordinal,
+        mode,
+      );
+      await interaction.editReply({
+        content: `Spectator mode set to **${mode}**.`,
+        components: [],
+      });
+      return;
+    }
     const ordinal = Number(interaction.values[0]);
     if (!Number.isInteger(ordinal)) throw new UserError("Invalid team selection.");
     if (action === "specteam") {
-      await interaction.deferUpdate();
       const aggregate = this.repository.getAggregate(
         interaction.guildId,
         customId,
@@ -578,20 +661,16 @@ export class InteractionHandler {
         (candidate) => candidate.ordinal === ordinal,
       );
       if (!team) throw new UserError("Team not found.");
-      const next: Record<SpectatorMode, SpectatorMode> = {
-        off: "silent",
-        silent: "speak",
-        speak: "off",
-      };
-      await this.sessions.setSpectators(
-        this.actor(interaction),
+      const select = this.buildSpectatorModeSelect(
         customId,
         ordinal,
-        next[team.spectatorMode],
+        team.spectatorMode,
       );
-      await interaction.editReply({
-        content: `Spectator mode set to **${next[team.spectatorMode]}**.`,
-        components: [],
+      await interaction.update({
+        content: `Choose spectator access for **T${String(ordinal).padStart(2, "0")} • ${team.name}**:`,
+        components: [
+          new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select),
+        ],
       });
       return;
     }
@@ -746,6 +825,36 @@ export class InteractionHandler {
           ),
           value: String(team.ordinal),
         })),
+      );
+  }
+
+  private buildSpectatorModeSelect(
+    customId: string,
+    ordinal: number,
+    currentMode: SpectatorMode,
+  ): StringSelectMenuBuilder {
+    return new StringSelectMenuBuilder()
+      .setCustomId(`sc:spectatormode:${customId}:${ordinal}`)
+      .setPlaceholder("Select spectator access")
+      .addOptions(
+        {
+          label: "Disabled",
+          description: "Only the team roster and custom creator may connect",
+          value: "off",
+          default: currentMode === "off",
+        },
+        {
+          label: "Silent",
+          description: "Spectators may connect but cannot speak or stream",
+          value: "silent",
+          default: currentMode === "silent",
+        },
+        {
+          label: "May Speak",
+          description: "Spectators may connect and speak",
+          value: "speak",
+          default: currentMode === "speak",
+        },
       );
   }
 

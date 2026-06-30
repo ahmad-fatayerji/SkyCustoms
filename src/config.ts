@@ -11,6 +11,7 @@ const schema = z.object({
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
+  PRESENCE_ROTATION_SECONDS: z.coerce.number().int().min(15).max(3600).default(45),
 });
 
 export type Config = {
@@ -19,6 +20,7 @@ export type Config = {
   devGuildId?: string;
   databasePath: string;
   logLevel: z.infer<typeof schema>["LOG_LEVEL"];
+  presenceRotationSeconds: number;
 };
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config {
@@ -31,5 +33,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
       : {}),
     databasePath: parsed.DATABASE_PATH,
     logLevel: parsed.LOG_LEVEL,
+    presenceRotationSeconds: parsed.PRESENCE_ROTATION_SECONDS,
   };
 }

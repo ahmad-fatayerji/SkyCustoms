@@ -13,8 +13,8 @@ Discord servers.
 
 - Per-server setup with owner-managed host users and roles.
 - Two to ten teams per custom.
-- Team channels share the lobby category and use names such as
-  `CS2 5v5 • T01 • Rush B`.
+- Each custom receives a temporary category containing channels such as
+  `T01 • Rush B`.
 - Direct roster assignment or randomized snake drafting.
 - Visible channels with disabled, silent, or speaking spectator modes.
 - Full cross-team voice access for the custom creator.
@@ -22,13 +22,14 @@ Discord servers.
 - Returns all team-channel occupants to the configured voice lobby on cleanup.
 - One-hour unused-setup and 30-minute empty-session cleanup defaults.
 - Persistent SQLite state and restart-safe Discord reconciliation.
+- Rotating bot activities for idle, setup, drafting, live, and cleanup states.
 - Rootless Podman deployment through user-level systemd Quadlets.
 
 ## How it works
 
 The server owner selects a text control lobby and voice return lobby inside one
-Discord category. When a host creates a custom, SkyCustoms creates its team
-voice channels in that category and posts an interactive control thread.
+Discord category. When a host creates a custom, SkyCustoms creates a temporary
+category for its team voice channels and posts an interactive control thread.
 
 The host assigns team leaders and either manages rosters directly or starts a
 snake draft. Leaders can rename their team, manage their roster when permitted,
@@ -85,6 +86,7 @@ DISCORD_TOKEN=the-bot-token
 DISCORD_CLIENT_ID=the-application-id
 DATABASE_PATH=/data/skycustoms.sqlite
 LOG_LEVEL=info
+PRESENCE_ROTATION_SECONDS=45
 ```
 
 `DISCORD_DEV_GUILD_ID` is optional and should normally be unset. It registers
@@ -94,6 +96,18 @@ for every installed server.
 For local Docker development, place these values in the ignored `.env` file.
 For rootless Podman production, store the token in the documented Podman secret
 and keep only non-secret configuration in the Quadlet environment file.
+
+### Bot presence
+
+SkyCustoms rotates playful Discord activities based on aggregate bot state,
+including waiting for a clutch, captain drafts, live customs, team-channel
+counts, and cleanup. `PRESENCE_ROTATION_SECONDS` controls the interval and must
+be between 15 and 3600 seconds.
+
+Discord bots have one global presence across every server, so SkyCustoms uses
+only aggregate counts and never exposes custom, server, team, or player names.
+Bot gateway presence does not support the full game Rich Presence surface with
+artwork, parties, and interactive buttons.
 
 ## First-time server setup
 
@@ -118,6 +132,16 @@ and keep only non-secret configuration in the Quadlet environment file.
    ```text
    /setup status
    ```
+
+6. Optionally customize category and team-channel names:
+
+   ```text
+   /setup naming category-format:🎮 {custom} channel-format:T{number:02} • {team}
+   ```
+
+   Category formats must contain `{custom}`. Channel formats must contain
+   `{team}` and may also use `{custom}`, `{number}`, or `{number:02}`. The
+   defaults are `{custom}` and `T{number:02} • {team}`.
 
 Only the Discord server owner can change setup. Configured hosts can create
 customs. The creator manages their custom, while the server owner and Discord
@@ -162,7 +186,7 @@ creator can change these values with `/custom timeout`.
 
 ## Commands
 
-- `/setup lobby|host-user|host-role|status`
+- `/setup lobby|naming|host-user|host-role|status`
 - `/custom create|list|start|timeout|repair|end`
 - `/team create|delete|leader|rename|add|remove|spectators`
 - `/draft start|pick|pass|undo|finish`
@@ -342,7 +366,7 @@ running multiple replicas would require shared persistence and distributed
 locking.
 
 The database is the desired state. On startup SkyCustoms restores missing
-voice channels, shared-category placement, canonical names, permission
+temporary categories, voice channels, canonical names, permission
 overwrites, control threads, occupancy state, and cleanup deadlines. Manual
 deletion of an active managed channel causes it to be recreated; end the custom
 through its command or control panel instead.

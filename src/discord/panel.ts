@@ -138,15 +138,21 @@ export function buildPanel(aggregate: CustomAggregate) {
               .setStyle(ButtonStyle.Secondary),
           ]
         : []),
-      custom.mode === "draft" && custom.status === "setup"
-        ? new ButtonBuilder()
-            .setCustomId(`sc:start:${custom.id}`)
-            .setLabel("Start Draft")
-            .setStyle(ButtonStyle.Primary)
-        : new ButtonBuilder()
-            .setCustomId(`sc:customstart:${custom.id}`)
-            .setLabel("Start Custom")
-            .setStyle(ButtonStyle.Success),
+      ...(custom.mode === "draft" && custom.status === "setup"
+        ? [
+            new ButtonBuilder()
+              .setCustomId(`sc:start:${custom.id}`)
+              .setLabel("Start Draft")
+              .setStyle(ButtonStyle.Primary),
+          ]
+        : custom.startedAt === null
+          ? [
+              new ButtonBuilder()
+                .setCustomId(`sc:customstart:${custom.id}`)
+                .setLabel("Start Custom")
+                .setStyle(ButtonStyle.Success),
+            ]
+          : []),
       new ButtonBuilder()
         .setCustomId(`sc:end:${custom.id}`)
         .setLabel("End Custom")

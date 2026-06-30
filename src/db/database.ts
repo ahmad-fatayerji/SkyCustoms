@@ -90,6 +90,12 @@ const migrations = [
     ALTER TABLE guild_config ADD COLUMN voice_lobby_channel_id TEXT;
     ALTER TABLE customs ADD COLUMN started_at INTEGER;
   `,
+  `
+    ALTER TABLE guild_config
+      ADD COLUMN category_format TEXT NOT NULL DEFAULT '{custom}';
+    ALTER TABLE guild_config
+      ADD COLUMN channel_format TEXT NOT NULL DEFAULT 'T{number:02} • {team}';
+  `,
 ];
 
 export function openDatabase(path: string): Database.Database {

@@ -70,6 +70,13 @@ describe("control panel", () => {
     expect(ids.some((id) => id.includes(":customstart:"))).toBe(true);
   });
 
+  it("removes the start button after the custom starts", () => {
+    const value = aggregate("direct", "active");
+    value.custom.startedAt = Date.now();
+    const ids = actions(value);
+    expect(ids.some((id) => id.includes(":customstart:"))).toBe(false);
+  });
+
   it("shows only setup-relevant draft controls before drafting", () => {
     const ids = actions(aggregate("draft", "setup"));
     expect(ids.some((id) => id.includes(":start:"))).toBe(true);

@@ -145,7 +145,14 @@ export class SessionService {
       const name = requestedName
         ? normalizeTeamName(requestedName)
         : `Team ${ordinal}`;
-      renderTeamChannelName(fresh.custom.name, ordinal, name);
+      const config = this.repository.getGuildConfig(fresh.custom.guildId);
+      if (!config) throw new UserError("This server is not configured.");
+      renderTeamChannelName(
+        config.channelFormat,
+        fresh.custom.name,
+        ordinal,
+        name,
+      );
       if (
         fresh.teams.some(
           (team) => normalizedNameKey(team.name) === normalizedNameKey(name),
@@ -210,7 +217,14 @@ export class SessionService {
     const team = this.requireTeam(aggregate, ordinal);
     this.requireTeamManager(actor, aggregate, team);
     const name = normalizeTeamName(requestedName);
-    renderTeamChannelName(aggregate.custom.name, ordinal, name);
+    const config = this.repository.getGuildConfig(aggregate.custom.guildId);
+    if (!config) throw new UserError("This server is not configured.");
+    renderTeamChannelName(
+      config.channelFormat,
+      aggregate.custom.name,
+      ordinal,
+      name,
+    );
     const key = normalizedNameKey(name);
     if (
       aggregate.teams.some(

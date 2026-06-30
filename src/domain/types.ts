@@ -12,6 +12,8 @@ export interface GuildConfig {
   guildId: string;
   lobbyChannelId: string;
   voiceLobbyChannelId: string | null;
+  categoryFormat: string;
+  channelFormat: string;
   createdAt: number;
   updatedAt: number;
 }

@@ -90,6 +90,25 @@ export const commandDefinitions = [
         ),
     )
     .addSubcommand((command) =>
+      command
+        .setName("naming")
+        .setDescription("Configure temporary category and team-channel names")
+        .addStringOption((option) =>
+          option
+            .setName("category-format")
+            .setDescription("Example: 🎮 {custom}")
+            .setMaxLength(100)
+            .setRequired(true),
+        )
+        .addStringOption((option) =>
+          option
+            .setName("channel-format")
+            .setDescription("Example: T{number:02} • {team}")
+            .setMaxLength(100)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((command) =>
       command.setName("status").setDescription("Show server configuration"),
     ),
   new SlashCommandBuilder()

@@ -102,6 +102,8 @@ export class Repository {
         row.voice_lobby_channel_id === null
           ? null
           : String(row.voice_lobby_channel_id),
+      categoryFormat: String(row.category_format),
+      channelFormat: String(row.channel_format),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     };
@@ -164,6 +166,19 @@ export class Repository {
       type: row.grant_type as GrantType,
       id: String(row.grant_id),
     }));
+  }
+
+  public setNamingFormats(
+    guildId: string,
+    categoryFormat: string,
+    channelFormat: string,
+  ): void {
+    this.database
+      .prepare(
+        `UPDATE guild_config SET category_format = ?, channel_format = ?,
+         updated_at = ? WHERE guild_id = ?`,
+      )
+      .run(categoryFormat, channelFormat, Date.now(), guildId);
   }
 
   public isHost(

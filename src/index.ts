@@ -4,6 +4,7 @@ import {
   GatewayIntentBits,
 } from "discord.js";
 import { LifecycleManager } from "./application/lifecycle.js";
+import { PresenceManager } from "./application/presence.js";
 import { SessionService } from "./application/session-service.js";
 import { loadConfig } from "./config.js";
 import { openDatabase } from "./db/database.js";
@@ -36,6 +37,12 @@ async function main(): Promise<void> {
     sessions,
     logger,
   );
+  const presence = new PresenceManager(
+    client,
+    repository,
+    logger,
+    config.presenceRotationSeconds,
+  );
 
   client.on(Events.InteractionCreate, (interaction) => {
     void interactions.handle(interaction);
@@ -58,6 +65,7 @@ async function main(): Promise<void> {
     try {
       await interactions.registerCommands();
       await lifecycle.start();
+      presence.start();
     } catch (error) {
       logger.fatal({ error }, "SkyCustoms startup failed");
       process.exitCode = 1;
@@ -71,6 +79,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ signal }, "Shutting down SkyCustoms");
     lifecycle.stop();
+    presence.stop();
     client.destroy();
     repository.close();
   };
