@@ -2,102 +2,52 @@ import { ActivityType, type Client, type PresenceData } from "discord.js";
 import type { Repository } from "../db/repository.js";
 import type { Logger } from "../logger.js";
 
-export interface PresenceSnapshot {
+type Activity = NonNullable<PresenceData["activities"]>[number];
+
+export interface PresenceStats {
   guilds: number;
   customs: number;
-  setup: number;
-  drafting: number;
-  live: number;
-  ending: number;
-  teams: number;
+  teamChannels: number;
+  assignedPlayers: number;
 }
-
-type Activity = NonNullable<PresenceData["activities"]>[number];
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`) {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
-export function buildPresenceOptions(snapshot: PresenceSnapshot): Activity[] {
-  if (snapshot.ending > 0) {
-    return [
-      {
-        type: ActivityType.Playing,
-        name: "Lobby Cleanup Simulator",
-      },
-      {
-        type: ActivityType.Watching,
-        name: `${plural(snapshot.ending, "custom")} pack up`,
-      },
-      {
-        type: ActivityType.Custom,
-        name: "SkyCustoms",
-        state: "🧹 Sweeping up temporary channels",
-      },
-    ];
-  }
-  if (snapshot.drafting > 0) {
-    return [
-      {
-        type: ActivityType.Competing,
-        name: `${plural(snapshot.drafting, "captain draft")}`,
-      },
-      {
-        type: ActivityType.Watching,
-        name: "first-pick arguments unfold",
-      },
-      {
-        type: ActivityType.Custom,
-        name: "SkyCustoms",
-        state: "🐍 Snake draft in progress",
-      },
-    ];
-  }
-  if (snapshot.live > 0) {
-    return [
-      {
-        type: ActivityType.Watching,
-        name: `${plural(snapshot.live, "live custom")}`,
-      },
-      {
-        type: ActivityType.Competing,
-        name: "for absolutely no prize",
-      },
-      {
-        type: ActivityType.Playing,
-        name: `${plural(snapshot.teams, "team channel")}`,
-      },
-    ];
-  }
-  if (snapshot.setup > 0) {
-    return [
-      {
-        type: ActivityType.Watching,
-        name: `${plural(snapshot.setup, "custom")} get ready`,
-      },
-      {
-        type: ActivityType.Listening,
-        name: "captains negotiate team names",
-      },
-      {
-        type: ActivityType.Playing,
-        name: "Pre-match Channel Tetris",
-      },
-    ];
-  }
+export function buildPresenceOptions(stats: PresenceStats): Activity[] {
   return [
     {
-      type: ActivityType.Custom,
-      name: "SkyCustoms",
-      state: "💤 Waiting for the next clutch",
+      type: ActivityType.Watching,
+      name: "captains blame the draft",
     },
     {
       type: ActivityType.Listening,
-      name: "for “one more game”",
+      name: "five people call mid",
+    },
+    {
+      type: ActivityType.Competing,
+      name: "absolutely no-prize customs",
     },
     {
       type: ActivityType.Watching,
-      name: `${plural(snapshot.guilds, "server")} warm up`,
+      name: `${plural(stats.teamChannels, "team channel")} across ${plural(stats.guilds, "server")}`,
+    },
+    {
+      type: ActivityType.Listening,
+      name: "the “one more game” speech",
+    },
+    {
+      type: ActivityType.Playing,
+      name: plural(stats.customs, "active custom"),
+    },
+    {
+      type: ActivityType.Watching,
+      name: `${plural(stats.assignedPlayers, "assigned player")} find their team`,
+    },
+    {
+      type: ActivityType.Playing,
+      name: "customs without the chaos",
     },
   ];
 }
@@ -127,25 +77,24 @@ export class PresenceManager {
   private update(): void {
     if (!this.client.user) return;
     const customs = this.repository.listCustoms();
-    let teams = 0;
-    for (const custom of customs) {
-      teams += this.repository.getAggregateById(custom.id)?.teams.length ?? 0;
-    }
-    const snapshot: PresenceSnapshot = {
+    const stats: PresenceStats = {
       guilds: this.client.guilds.cache.size,
       customs: customs.length,
-      setup: customs.filter(
-        (custom) =>
-          custom.startedAt === null &&
-          custom.status !== "drafting" &&
-          custom.status !== "ending",
-      ).length,
-      drafting: customs.filter((custom) => custom.status === "drafting").length,
-      live: customs.filter((custom) => custom.startedAt !== null).length,
-      ending: customs.filter((custom) => custom.status === "ending").length,
-      teams,
+      teamChannels: 0,
+      assignedPlayers: 0,
     };
-    const options = buildPresenceOptions(snapshot);
+    for (const custom of customs) {
+      const aggregate = this.repository.getAggregateById(custom.id);
+      if (!aggregate) continue;
+      stats.teamChannels += aggregate.teams.filter(
+        (team) => team.voiceChannelId !== null,
+      ).length;
+      stats.assignedPlayers += aggregate.teams.reduce(
+        (total, team) => total + team.members.length,
+        0,
+      );
+    }
+    const options = buildPresenceOptions(stats);
     const activity = options[this.rotation % options.length]!;
     this.rotation += 1;
     this.client.user.setPresence({
@@ -153,7 +102,7 @@ export class PresenceManager {
       activities: [activity],
     });
     this.logger.debug(
-      { snapshot, activity: activity.name },
+      { stats, activity: activity.name },
       "Updated Discord presence",
     );
   }
