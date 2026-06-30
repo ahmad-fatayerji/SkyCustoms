@@ -1,0 +1,22 @@
+services:
+  skycustoms:
+    build:
+      context: .
+      dockerfile: Containerfile
+      target: development
+    image: localhost/skycustoms:dev
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /data/skycustoms.sqlite
+      LOG_LEVEL: debug
+    volumes:
+      - .:/app
+      - skycustoms-dev-node-modules:/app/node_modules
+      - skycustoms-dev-data:/data
+
+volumes:
+  skycustoms-dev-node-modules:
+  skycustoms-dev-data:

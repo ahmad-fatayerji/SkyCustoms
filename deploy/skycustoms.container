@@ -1,0 +1,24 @@
+[Unit]
+Description=SkyCustoms Discord bot
+
+[Container]
+Image=localhost/skycustoms:latest
+Pull=never
+ContainerName=skycustoms
+User=10001
+Group=10001
+Volume=skycustoms-data.volume:/data
+Secret=skycustoms-discord-token,type=env,target=DISCORD_TOKEN
+EnvironmentFile=%h/.config/skycustoms/skycustoms.env
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+Tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target
