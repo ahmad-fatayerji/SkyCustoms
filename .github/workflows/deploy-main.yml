@@ -66,8 +66,19 @@ jobs:
             PRESENCE_ROTATION_SECONDS=${PRESENCE_ROTATION_SECONDS}
             EOF
 
-            printf '%s' "$DISCORD_TOKEN" |
-              podman secret create --replace skycustoms-discord-token -
+            TOKEN_FILE="$(mktemp)"
+            trap 'rm -f "$TOKEN_FILE"' EXIT
+            printf '%s' "$DISCORD_TOKEN" > "$TOKEN_FILE"
+            if [ ! -s "$TOKEN_FILE" ]; then
+              echo "ERROR: DISCORD_TOKEN reached the server empty."
+              exit 1
+            fi
+            podman secret create \
+              --replace \
+              skycustoms-discord-token \
+              "$TOKEN_FILE"
+            rm -f "$TOKEN_FILE"
+            trap - EXIT
 
             cp -f \
               deploy/skycustoms.container \
